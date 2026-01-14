@@ -2,7 +2,7 @@ from ev2gym.models.ev2gym_env import EV2Gym
 from ev2gym.baselines.mpc.V2GProfitMax import V2GProfitMaxOracle
 from ev2gym.baselines.heuristics import ChargeAsFastAsPossible
 
-config_file = "ev2gym/example_config_files/V2GProfitPlusLoads.yaml"
+config_file = "./simplePST.yaml"
 
 # Initialize the environment
 env = EV2Gym(config_file=config_file,
