@@ -5,6 +5,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.callbacks import EvalCallback
 # from sb3_contrib import TQC, TRPO, ARS, RecurrentPPO
 
+import ev2gym
 from ev2gym.models.ev2gym_env import EV2Gym
 from ev2gym.rl_agent.reward import SquaredTrackingErrorReward, ProfitMax_TrPenalty_UserIncentives
 from ev2gym.rl_agent.reward import profit_maximization
@@ -66,9 +67,13 @@ if __name__ == "__main__":
     parser.add_argument('--device', type=str, default="cuda:0")
     parser.add_argument('--train_steps', type=int, default=20_000) 
     parser.add_argument('--run_name', type=str, default="")
+    
+    # Get the default config file path from the installed ev2gym package
+    ev2gym_path = os.path.dirname(ev2gym.__file__)
+    default_config = os.path.join(ev2gym_path, "example_config_files/V2GProfitPlusLoads.yaml")
+    
     parser.add_argument('--config_file', type=str,
-                        # default="ev2gym/example_config_files/V2GProfitMax.yaml")
-    default="ev2gym/example_config_files/V2GProfitPlusLoads.yaml")
+                        default=default_config)
     parser.add_argument('--reward_function', type=str, default=None,
                         help="Reward function: built-in name (e.g., 'profit_maximization') or custom 'module:function' (e.g., 'my_reward:custom_reward')")
     parser.add_argument('--state_function', type=str, default=None,
@@ -98,15 +103,15 @@ if __name__ == "__main__":
     }
 
     # Determine reward and state functions based on config file (defaults)
-    if config_file == "ev2gym/example_config_files/V2GProfitMax.yaml":
+    if config_file == os.path.join(ev2gym_path, "example_config_files/V2GProfitMax.yaml"):
         reward_function = profit_maximization
         state_function = V2G_profit_max
         group_name = f'{config["number_of_charging_stations"]}cs_V2GProfitMax'
-    elif config_file == "ev2gym/example_config_files/PublicPST.yaml":
+    elif config_file == os.path.join(ev2gym_path, "example_config_files/PublicPST.yaml"):
         reward_function = SquaredTrackingErrorReward
         state_function = PublicPST
         group_name = f'{config["number_of_charging_stations"]}cs_PublicPST'
-    elif config_file == "ev2gym/example_config_files/V2GProfitPlusLoads.yaml":
+    elif config_file == os.path.join(ev2gym_path, "example_config_files/V2GProfitPlusLoads.yaml"):
         reward_function = ProfitMax_TrPenalty_UserIncentives
         state_function = V2G_profit_max_loads
         group_name = f'{config["number_of_charging_stations"]}cs_V2GProfitPlusLoads'
