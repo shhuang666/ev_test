@@ -3,7 +3,7 @@
 from stable_baselines3 import PPO, A2C, DDPG, SAC, TD3
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.callbacks import EvalCallback
-from sb3_contrib import TQC, TRPO, ARS, RecurrentPPO
+# from sb3_contrib import TQC, TRPO, ARS, RecurrentPPO
 
 from ev2gym.models.ev2gym_env import EV2Gym
 from ev2gym.rl_agent.reward import SquaredTrackingErrorReward, ProfitMax_TrPenalty_UserIncentives
@@ -49,6 +49,12 @@ if __name__ == "__main__":
         reward_function = ProfitMax_TrPenalty_UserIncentives
         state_function = V2G_profit_max_loads
         group_name = f'{config["number_of_charging_stations"]}cs_V2GProfitPlusLoads'
+    else:
+        # Default for custom config files
+        reward_function = profit_maximization
+        state_function = V2G_profit_max
+        config_name = os.path.splitext(os.path.basename(config_file))[0]
+        group_name = f'{config["number_of_charging_stations"]}cs_{config_name}'
                 
     run_name += f'{algorithm}_{reward_function.__name__}_{state_function.__name__}'
 
@@ -107,18 +113,18 @@ if __name__ == "__main__":
     elif algorithm == "ppo":
         model = PPO("MlpPolicy", env, verbose=1,
                     device=device, tensorboard_log="./logs/")
-    elif algorithm == "tqc":
-        model = TQC("MlpPolicy", env, verbose=1,
-                    device=device, tensorboard_log="./logs/")
-    elif algorithm == "trpo":
-        model = TRPO("MlpPolicy", env, verbose=1,
-                     device=device, tensorboard_log="./logs/")
-    elif algorithm == "ars":
-        model = ARS("MlpPolicy", env, verbose=1,
-                    device=device, tensorboard_log="./logs/")
-    elif algorithm == "rppo":
-        model = RecurrentPPO("MlpLstmPolicy", env, verbose=1,
-                             device=device, tensorboard_log="./logs/")
+    # elif algorithm == "tqc":
+    #     model = TQC("MlpPolicy", env, verbose=1,
+    #                 device=device, tensorboard_log="./logs/")
+    # elif algorithm == "trpo":
+    #     model = TRPO("MlpPolicy", env, verbose=1,
+    #                  device=device, tensorboard_log="./logs/")
+    # elif algorithm == "ars":
+    #     model = ARS("MlpPolicy", env, verbose=1,
+    #                 device=device, tensorboard_log="./logs/")
+    # elif algorithm == "rppo":
+    #     model = RecurrentPPO("MlpLstmPolicy", env, verbose=1,
+    #                          device=device, tensorboard_log="./logs/")
     else:
         raise ValueError("Unknown algorithm")
 
