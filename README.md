@@ -1,295 +1,383 @@
-# EV2Gym Gurobi Models Comparison
+# EV2Gym Configuration Comparison
 
-This document provides a detailed comparison of the three Gurobi-based optimization models in EV2Gym's baseline algorithms.
+This document provides a comprehensive comparison of the three recommended configurations in `train_stable_baselines.py` for training RL agents with the EV2Gym environment.
+
+## Overview
+
+The `train_stable_baselines.py` script supports three different configuration setups, each optimized for different objectives in EV charging management. The configuration is selected via the `--config_file` argument and determines which reward function and state function are used.
 
 ---
 
-## Overview Table
+## Table 1: YAML Configuration Settings Comparison
 
-| Feature | **profit_max.py** | **tracking_error.py** | **v2g_grid.py** |
-|---------|-------------------|----------------------|-----------------|
-| **Class Name** | `V2GProfitMaxOracleGB` | `PowerTrackingErrorrMin` | `V2GProfitMax_Grid_OracleGB` |
-| **Primary Objective** | Maximize V2G profit | Minimize power tracking error | Maximize profit with grid constraints |
-| **Grid Modeling** | ❌ No | ❌ No | ✅ Yes (voltage constraints) |
-| **User Satisfaction** | ✅ Yes (penalty term) | ❌ No | ✅ Yes (penalty term) |
-| **Power Setpoints** | ❌ Not used | ✅ Required | ✅ Used in grid model |
+| **Parameter** | **V2GProfitMax** | **PublicPST** | **V2GProfitPlusLoads** |
+|---------------|------------------|---------------|------------------------|
+| **File Path** | `ev2gym/example_config_files/V2GProfitMax.yaml` | `ev2gym/example_config_files/PublicPST.yaml` | `ev2gym/example_config_files/V2GProfitPlusLoads.yaml` |
+| **Scenario** | `workplace` | `public` | `workplace` |
+| **V2G Enabled** | ✅ `True` | ❌ `False` | ✅ `True` |
+| **Number of Charging Stations** | 25 | 20 | 25 |
+| **Max Charge Current** | 32 A | 16 A | 32 A |
+| **Max Discharge Current** | -32 A | 0 A (no discharge) | -32 A |
+| **Power Setpoint Enabled** | ❌ `False` | ✅ `True` | ❌ `False` |
+| **Power Setpoint Flexibility** | 80% | 80% | 80% |
+| **Inflexible Loads** | ❌ `False` | ❌ `False` | ✅ `True` |
+| **Solar Power** | ❌ `False` | ❌ `False` | ✅ `True` |
+| **Demand Response** | ❌ `False` | ❌ `False` | ✅ `True` |
+| **EV Specs File** | `ev_specs_v2g_enabled2024.json` | `ev_specs_ev_plus_phev.json` | `ev_specs_v2g_enabled2024.json` |
+| **Min Time of Stay** | 180 min | 60 min | 180 min |
+| **Simulate Grid** | ❌ `False` | ❌ `False` | ❌ `False` |
+| **Timescale** | 15 min | 15 min | 15 min |
+| **Simulation Length** | 112 steps | 112 steps | 112 steps |
+| **Spawn Multiplier** | 5 | 5 | 5 |
+
+### Key Differences
+
+1. **V2GProfitMax**: 
+   - Workplace scenario with V2G enabled
+   - No external loads or constraints
+   - Focus on bidirectional charging for profit
+
+2. **PublicPST**: 
+   - Public charging scenario (shorter stays)
+   - **Power setpoint tracking enabled**
+   - Unidirectional charging only (no V2G)
+   - Lower charging current (16A vs 32A)
+
+3. **V2GProfitPlusLoads**: 
+   - Workplace scenario with V2G enabled
+   - **Includes inflexible loads, solar power, and demand response**
+   - Most realistic and complex scenario
+
+---
+
+## Table 2: Reward Functions Comparison
+
+| **Aspect** | **V2GProfitMax** | **PublicPST** | **V2GProfitPlusLoads** |
+|------------|------------------|---------------|------------------------|
+| **Function Name** | `profit_maximization` | `SquaredTrackingErrorReward` | `ProfitMax_TrPenalty_UserIncentives` |
+| **Primary Objective** | Maximize profit | Minimize tracking error | Multi-objective balance |
+| **Profit Component** | ✅ Yes | ❌ No | ✅ Yes |
+| **Tracking Error** | ❌ No | ✅ Yes (squared) | ❌ No |
+| **Transformer Penalty** | ❌ No | ❌ No | ✅ Yes (100× overload) |
+| **User Satisfaction** | ✅ Yes (exponential) | ❌ No | ✅ Yes (exponential) |
+| **Grid Constraints** | ❌ No | ❌ No | ✅ Yes |
+
+### Reward Function Equations
+
+#### 1. `profit_maximization` (V2GProfitMax)
+
+$$
+R_t = C_{\text{total}} - 100 \sum_{i \in \text{EVs}} e^{-10 \cdot s_i}
+$$
+
+Where:
+- $C_{\text{total}}$ = Total costs (negative for profit, positive for cost)
+- $s_i$ = User satisfaction score for EV $i$ (0-1)
+- The exponential term heavily penalizes low satisfaction scores
+
+**Code Reference** (lines 78-87):
+```python
+def profit_maximization(env, total_costs, user_satisfaction_list, *args):
+    reward = total_costs
+    for score in user_satisfaction_list:
+        reward -= 100 * math.exp(-10*score)
+    return reward
+```
+
+---
+
+#### 2. `SquaredTrackingErrorReward` (PublicPST)
+
+$$
+R_t = -\left(\min(P_{\text{setpoint}}^t, P_{\text{potential}}^t) - P_{\text{actual}}^t\right)^2
+$$
+
+Where:
+- $P_{\text{setpoint}}^t$ = Power setpoint at time $t$
+- $P_{\text{potential}}^t$ = Maximum charging power potential at time $t$
+- $P_{\text{actual}}^t$ = Actual power usage at time $t$
+- The negative sign ensures reward is always ≤ 0 (penalty for deviation)
+
+**Code Reference** (lines 7-14):
+```python
+def SquaredTrackingErrorReward(env,*args):
+    reward = - (min(env.power_setpoints[env.current_step-1], 
+                    env.charge_power_potential[env.current_step-1]) -
+                env.current_power_usage[env.current_step-1])**2
+    return reward
+```
+
+---
+
+#### 3. `ProfitMax_TrPenalty_UserIncentives` (V2GProfitPlusLoads)
+
+$$
+R_t = C_{\text{total}} - 100 \sum_{j \in \text{Transformers}} O_j - 100 \sum_{i \in \text{EVs}} e^{-10 \cdot s_i}
+$$
+
+Where:
+- $C_{\text{total}}$ = Total costs (profit component)
+- $O_j$ = Overload amount for transformer $j$ (in kW beyond limit)
+- $s_i$ = User satisfaction score for EV $i$ (0-1)
+- **Three components**: Profit + Transformer penalty + User satisfaction
+
+**Code Reference** (lines 34-44):
+```python
+def ProfitMax_TrPenalty_UserIncentives(env, total_costs, user_satisfaction_list, *args):
+    reward = total_costs
+    
+    for tr in env.transformers:
+        reward -= 100 * tr.get_how_overloaded()                        
+    
+    for score in user_satisfaction_list:        
+        reward -= 100 * math.exp(-10*score)
+        
+    return reward
+```
+
+### Reward Function Characteristics
+
+| **Characteristic** | **V2GProfitMax** | **PublicPST** | **V2GProfitPlusLoads** |
+|--------------------|------------------|---------------|------------------------|
+| **Range** | $(-\infty, +\infty)$ | $(-\infty, 0]$ | $(-\infty, +\infty)$ |
+| **Sign** | Can be positive (profit) | Always negative (penalty) | Can be positive (profit) |
+| **Components** | 2 (profit + user) | 1 (tracking error) | 3 (profit + transformer + user) |
 | **Complexity** | Medium | Low | High |
-| **File Size** | 421 lines | 421 lines | 566 lines |
+| **Sparsity** | Dense | Dense | Dense |
 
 ---
 
-## 1. V2GProfitMaxOracleGB (`profit_max.py`)
+## Table 3: State Functions Comparison
 
-### **Objective Function**
+| **Aspect** | **V2GProfitMax** | **PublicPST** | **V2GProfitPlusLoads** |
+|------------|------------------|---------------|------------------------|
+| **Function Name** | `V2G_profit_max` | `PublicPST` | `V2G_profit_max_loads` |
+| **State Dimension** | Variable | Variable | Variable |
+| **Time Features** | Current step | Normalized step (0-1) | Current step |
+| **Price Forecast** | ✅ 20 steps ahead | ❌ No | ✅ 20 steps ahead |
+| **Power Setpoint** | ❌ No | ✅ Current step | ❌ No |
+| **Current Power Usage** | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Load Forecast** | ❌ No | ❌ No | ✅ 20 steps (loads - PV) |
+| **Power Limits** | ❌ No | ❌ No | ✅ 20 steps ahead |
+| **EV Features per CS** | 2 (SoC, time to departure) | 3 (full flag, energy exchanged, time since arrival) | 2 (SoC, time to departure) |
+
+### State Function Details
+
+#### 1. `V2G_profit_max` (V2GProfitMax)
+
+**State Vector Components:**
 ```python
-maximize: costs - 100 * user_satisfaction.sum()
+state = [
+    current_step,                          # 1 feature
+    current_power_usage[t-1],              # 1 feature
+    charge_prices[t:t+20],                 # 20 features (price forecast)
+    # For each charging station:
+    [EV_SoC, time_to_departure]            # 2 features × N_cs
+]
 ```
 
-Where:
-- **costs** = Revenue from charging/discharging based on electricity prices
-- **user_satisfaction** = Penalty for not meeting desired energy at departure
+**Total Dimension**: $1 + 1 + 20 + 2 \times N_{\text{cs}} = 22 + 2N_{\text{cs}}$
 
-### **Key Features**
-- ✅ **Profit maximization** through arbitrage (buy low, sell high)
-- ✅ **User satisfaction** penalty (100× weight)
-- ✅ **V2G bidirectional** charging/discharging
-- ✅ **Efficiency modeling** (0.9× multiplier on charger efficiency)
-- ❌ **No power setpoint tracking**
-- ❌ **No grid voltage constraints**
+For 25 charging stations: **72 features**
 
-### **Objective Components**
-1. **Revenue from charging**: `charge_current × voltage × efficiency × dt × charge_price`
-2. **Revenue from discharging**: `discharge_current × voltage × efficiency × dt × discharge_price`
-3. **User satisfaction penalty**: `(desired_energy - actual_energy)²`
-
-### **Use Case**
-Best for scenarios where:
-- Electricity prices vary significantly over time
-- V2G revenue is the primary goal
-- Grid stability is not a concern
-- Users have flexible departure energy requirements
-
----
-
-## 2. PowerTrackingErrorrMin (`tracking_error.py`)
-
-### **Objective Function**
+**Code Reference** (lines 65-106):
 ```python
-minimize: power_error.sum()
-```
-
-Where:
-- **power_error[t]** = `(total_power[t] - power_setpoint[t])²`
-
-### **Key Features**
-- ✅ **Power setpoint tracking** (minimize squared error)
-- ✅ **V2G bidirectional** charging/discharging
-- ✅ **Transformer constraints** (respects grid limits)
-- ❌ **No profit optimization**
-- ❌ **No user satisfaction modeling**
-- ❌ **No grid voltage constraints**
-
-### **Objective Components**
-1. **Tracking error**: Squared difference between actual and target power consumption
-2. **Total SOC**: Sum of energy at departure (commented out in objective)
-
-### **Use Case**
-Best for scenarios where:
-- Following a specific power consumption profile is critical
-- Grid operator provides power setpoints
-- Demand response programs require precise tracking
-- Frequency regulation or load balancing services
-
----
-
-## 3. V2GProfitMax_Grid_OracleGB (`v2g_grid.py`)
-
-### **Objective Function**
-```python
-maximize: 1000 * voltage_slack
-```
-
-Where:
-- **voltage_slack** = Penalties for voltage limit violations
-
-### **Key Features**
-- ✅ **Grid voltage modeling** (iterative power flow)
-- ✅ **Voltage constraints** (0.95 ≤ V ≤ 1.05 p.u.)
-- ✅ **User satisfaction** penalty
-- ✅ **V2G bidirectional** charging/discharging
-- ✅ **Complex grid physics** (3 iterations of power flow)
-- ✅ **Active and reactive power** modeling
-
-### **Grid Model Details**
-- **Iterative voltage calculation** (3 iterations)
-- **Voltage magnitude constraints** with slack variables
-- **Power flow equations**: 
-  - Real: `d × L_r = S_r × v_r + S_i × v_i`
-  - Imaginary: `d × L_i = -(S_i × v_r - S_r × v_i)`
-- **Matrix multiplication**: `Z = K @ L + W`
-
-### **Objective Components**
-1. **Voltage slack penalty**: Weighted sum of voltage limit violations
-2. **User satisfaction**: (Commented out, but available)
-3. **Profit**: (Commented out, but calculated)
-
-### **Use Case**
-Best for scenarios where:
-- Grid voltage stability is critical
-- Distribution network has voltage constraints
-- Studying impact of EV charging on grid
-- Research on grid-aware charging strategies
-
----
-
-## Detailed Comparison
-
-### **Decision Variables**
-
-All three models share these common variables:
-- `energy[p, i, t]` - EV battery energy
-- `current_ev_ch[p, i, t]` - Charging current
-- `current_ev_dis[p, i, t]` - Discharging current
-- `omega_ch[p, i, t]` - Binary: charging mode
-- `omega_dis[p, i, t]` - Binary: discharging mode
-- `power_cs_ch[i, t]` - Charging station power (charge)
-- `power_cs_dis[i, t]` - Charging station power (discharge)
-
-**Additional in v2g_grid.py:**
-- `v_r[it, t, j]` - Voltage real component (per iteration)
-- `v_i[it, t, j]` - Voltage imaginary component (per iteration)
-- `m_vars[t, j]` - Voltage magnitude
-- `slack_low[t, j]`, `slack_high[t, j]` - Voltage violation slack
-
-### **Constraints**
-
-#### Common Constraints (All Models)
-1. **Energy dynamics**: `energy[t] = energy[t-1] + charge - discharge`
-2. **Energy limits**: `0 ≤ energy ≤ max_energy`
-3. **Current limits**: Respect charger and EV limits
-4. **Transformer limits**: Circuit breaker constraints
-5. **Mutual exclusion**: Cannot charge and discharge simultaneously
-6. **Empty port**: No power if EV not present
-
-#### Model-Specific Constraints
-
-**profit_max.py:**
-- User satisfaction at departure
-
-**tracking_error.py:**
-- Power tracking error calculation
-
-**v2g_grid.py:**
-- Voltage magnitude constraints
-- Power flow equations
-- Grid matrix operations
-- Iterative voltage updates
-
-### **Computational Complexity**
-
-| Model | Problem Type | Binary Vars | Continuous Vars | Constraints | Solve Time |
-|-------|-------------|-------------|-----------------|-------------|------------|
-| **profit_max** | MIQCP | Medium | High | Medium | Fast-Medium |
-| **tracking_error** | MIQCP | Medium | High | Medium | Fast-Medium |
-| **v2g_grid** | MIQCP | Medium | Very High | Very High | Slow |
-
-*MIQCP = Mixed Integer Quadratically Constrained Program*
-
-### **Parameters**
-
-| Parameter | profit_max | tracking_error | v2g_grid |
-|-----------|------------|----------------|----------|
-| `timelimit` | ✅ | ❌ | ✅ |
-| `MIPGap` | ✅ | ❌ | ✅ |
-| `verbose` | ✅ | ❌ | ✅ |
-| `replay_path` | ✅ | ✅ | ✅ |
-
----
-
-## When to Use Each Model
-
-### Use **profit_max.py** when:
-- 🎯 Goal: Maximize revenue from V2G operations
-- 💰 Variable electricity pricing is available
-- 👥 User satisfaction is important
-- ⚡ Grid constraints are not critical
-- 🚀 Need faster optimization
-
-### Use **tracking_error.py** when:
-- 🎯 Goal: Follow specific power consumption profile
-- 📊 Power setpoints provided by grid operator
-- 🔄 Demand response or frequency regulation
-- ⚖️ Load balancing is priority
-- 🚀 Need fastest optimization
-
-### Use **v2g_grid.py** when:
-- 🎯 Goal: Grid-aware charging with voltage constraints
-- 🔌 Distribution network has voltage limits
-- 🔬 Research on grid impact of EV charging
-- 📈 Need detailed grid modeling
-- ⏱️ Can afford longer solve times
-
----
-
-## Code Example: Using the Models
-
-```python
-import pickle
-from ev2gym.baselines.gurobi_models.profit_max import V2GProfitMaxOracleGB
-from ev2gym.baselines.gurobi_models.tracking_error import PowerTrackingErrorrMin
-from ev2gym.baselines.gurobi_models.v2g_grid import V2GProfitMax_Grid_OracleGB
-
-# 1. Profit Maximization
-profit_model = V2GProfitMaxOracleGB(
-    replay_path='path/to/replay.pkl',
-    timelimit=300,  # 5 minutes
-    MIPGap=0.01,    # 1% optimality gap
-    verbose=True
-)
-
-# 2. Power Tracking
-tracking_model = PowerTrackingErrorrMin(
-    replay_path='path/to/replay.pkl'
-)
-
-# 3. Grid-Aware Profit Max
-grid_model = V2GProfitMax_Grid_OracleGB(
-    replay_path='path/to/replay.pkl',
-    timelimit=600,  # 10 minutes (needs more time)
-    MIPGap=0.05,    # 5% gap (more relaxed)
-    verbose=True
-)
-
-# Get actions for current step
-action = profit_model.get_action(env)
+def V2G_profit_max(env, *args):
+    state = [(env.current_step)]
+    state.append(env.current_power_usage[env.current_step-1])
+    
+    charge_prices = abs(env.charge_prices[0, env.current_step:env.current_step+20])
+    if len(charge_prices) < 20:
+        charge_prices = np.append(charge_prices, np.zeros(20-len(charge_prices)))
+    state.append(charge_prices)
+    
+    for tr in env.transformers:
+        for cs in env.charging_stations:
+            if cs.connected_transformer == tr.id:
+                for EV in cs.evs_connected:
+                    if EV is not None:
+                        state.append([EV.get_soc(), 
+                                     EV.time_of_departure - env.current_step])
+                    else:
+                        state.append(np.zeros(2))
+    
+    return np.array(np.hstack(state))
 ```
 
 ---
 
-## Performance Considerations
+#### 2. `PublicPST` (PublicPST)
 
-### **Optimization Speed** (Fastest → Slowest)
-1. **tracking_error.py** - Simple quadratic objective
-2. **profit_max.py** - Quadratic with user satisfaction
-3. **v2g_grid.py** - Complex with grid constraints
+**State Vector Components:**
+```python
+state = [
+    current_step / simulation_length,      # 1 feature (normalized)
+    power_setpoint[t],                     # 1 feature
+    current_power_usage[t-1],              # 1 feature
+    # For each charging station:
+    [full_flag, energy_exchanged, time_since_arrival]  # 3 features × N_cs
+]
+```
 
-### **Memory Usage** (Lowest → Highest)
-1. **tracking_error.py** - Fewest variables
-2. **profit_max.py** - Standard variables
-3. **v2g_grid.py** - Many grid-related variables
+**Total Dimension**: $1 + 1 + 1 + 3 \times N_{\text{cs}} = 3 + 3N_{\text{cs}}$
 
-### **Scalability**
-- All models scale with: `n_ports × n_cs × sim_length`
-- **v2g_grid** additionally scales with: `n_buses × n_iterations`
+For 20 charging stations: **63 features**
+
+**Code Reference** (lines 6-63):
+```python
+def PublicPST(env, *args):
+    state = [(env.current_step/env.simulation_length)]
+    
+    if env.current_step < env.simulation_length:  
+        setpoint = env.power_setpoints[env.current_step]
+    else:
+        setpoint = np.zeros((1))
+    
+    state.append(setpoint)
+    state.append(env.current_power_usage[env.current_step-1])
+    
+    for tr in env.transformers:
+        for cs in env.charging_stations:
+            if cs.connected_transformer == tr.id:
+                for EV in cs.evs_connected:
+                    if EV is not None:
+                        state.append([
+                            1 if EV.get_soc() == 1 else 0.5,  # full flag
+                            EV.total_energy_exchanged,
+                            (env.current_step-EV.time_of_arrival)
+                        ])
+                    else:
+                        state.append(np.zeros(3))
+    
+    return np.array(np.hstack(state))
+```
 
 ---
 
-## Key Differences Summary
+#### 3. `V2G_profit_max_loads` (V2GProfitPlusLoads)
 
-| Aspect | profit_max | tracking_error | v2g_grid |
-|--------|------------|----------------|----------|
-| **Primary Goal** | 💰 Revenue | 🎯 Tracking | 🔌 Grid Health |
-| **Optimization Direction** | Maximize | Minimize | Maximize |
-| **Grid Modeling** | None | None | Full |
-| **User Focus** | High | None | Medium |
-| **Complexity** | Medium | Low | High |
-| **Real-world Application** | Energy arbitrage | Demand response | Grid planning |
+**State Vector Components:**
+```python
+state = [
+    current_step,                          # 1 feature
+    current_power_usage[t-1],              # 1 feature
+    charge_prices[t:t+20],                 # 20 features (price forecast)
+    loads_minus_pv[t:t+20],                # 20 features (net load forecast)
+    power_limits[t:t+20],                  # 20 features (transformer limits)
+    # For each charging station:
+    [EV_SoC, time_to_departure]            # 2 features × N_cs
+]
+```
+
+**Total Dimension**: $1 + 1 + 20 + 20 + 20 + 2 \times N_{\text{cs}} = 62 + 2N_{\text{cs}}$
+
+For 25 charging stations: **112 features**
+
+**Code Reference** (lines 108-155):
+```python
+def V2G_profit_max_loads(env, *args):
+    state = [(env.current_step)]
+    state.append(env.current_power_usage[env.current_step-1])
+    
+    charge_prices = abs(env.charge_prices[0, env.current_step:env.current_step+20])
+    if len(charge_prices) < 20:
+        charge_prices = np.append(charge_prices, np.zeros(20-len(charge_prices)))
+    state.append(charge_prices)
+    
+    for tr in env.transformers:
+        loads, pv = tr.get_load_pv_forecast(step=env.current_step, horizon=20)
+        power_limits = tr.get_power_limits(step=env.current_step, horizon=20)
+        state.append(loads-pv)
+        state.append(power_limits)
+        
+        for cs in env.charging_stations:
+            if cs.connected_transformer == tr.id:
+                for EV in cs.evs_connected:
+                    if EV is not None:
+                        state.append([EV.get_soc(), 
+                                     EV.time_of_departure - env.current_step])
+                    else:
+                        state.append(np.zeros(2))
+    
+    return np.array(np.hstack(state))
+```
+
+### State Space Comparison
+
+| **Feature Category** | **V2GProfitMax** | **PublicPST** | **V2GProfitPlusLoads** |
+|---------------------|------------------|---------------|------------------------|
+| **Temporal** | Current step | Normalized step | Current step |
+| **Economic** | 20-step price forecast | None | 20-step price forecast |
+| **Grid/Load** | None | Power setpoint | Net loads + limits (40 features) |
+| **Power** | Current usage | Current usage + setpoint | Current usage |
+| **EV Info** | SoC + departure time | Full flag + energy + arrival time | SoC + departure time |
+| **State Dim (25 CS)** | 72 | 78* | 112 |
+| **Forecast Horizon** | 20 steps (prices) | 0 steps | 20 steps (prices + loads) |
+
+*PublicPST uses 20 charging stations by default
+
+---
+
+## Quick Comparison Summary
+
+| **Aspect** | **V2GProfitMax** | **PublicPST** | **V2GProfitPlusLoads** |
+|------------|------------------|---------------|------------------------|
+| **Primary Goal** | Profit Maximization | Power Tracking | Multi-Objective Balance |
+| **Scenario Type** | Workplace V2G | Public Charging | Workplace V2G + Loads |
+| **V2G Support** | ✅ Full bidirectional | ❌ Charge only | ✅ Full bidirectional |
+| **External Loads** | ❌ None | ❌ None | ✅ Loads + Solar + DR |
+| **Reward Complexity** | Medium (2 terms) | Low (1 term) | High (3 terms) |
+| **State Complexity** | Medium (72 dim) | Medium (63 dim) | High (112 dim) |
+| **Default Config** | ❌ No | ❌ No | ✅ Yes |
+| **Best Use Case** | Pure profit scenarios | Grid services | Real-world deployments |
+
+---
+
+## Usage Examples
+
+### Training with V2GProfitMax
+```bash
+python train_stable_baselines.py --config_file ev2gym/example_config_files/V2GProfitMax.yaml --algorithm ppo
+```
+
+### Training with PublicPST
+```bash
+python train_stable_baselines.py --config_file ev2gym/example_config_files/PublicPST.yaml --algorithm ppo
+```
+
+### Training with V2GProfitPlusLoads (Default)
+```bash
+python train_stable_baselines.py --algorithm ppo
+# or explicitly:
+python train_stable_baselines.py --config_file ev2gym/example_config_files/V2GProfitPlusLoads.yaml --algorithm ppo
+```
 
 ---
 
 ## Recommendations
 
-1. **For beginners**: Start with `tracking_error.py` - simplest and fastest
-2. **For V2G business**: Use `profit_max.py` - focuses on revenue
-3. **For grid research**: Use `v2g_grid.py` - most comprehensive
-4. **For production**: Consider combining approaches or using MPC baselines for real-time control
+1. **Start with V2GProfitPlusLoads**: It's the default for a reason - it provides the most balanced and realistic training scenario with comprehensive state information and multi-objective rewards.
+
+2. **Use V2GProfitMax**: When you specifically need to maximize revenue in a controlled environment without external load constraints. Ideal for studying pure V2G arbitrage strategies.
+
+3. **Use PublicPST**: When participating in grid services (frequency regulation, demand response) or when accurate power tracking is the primary requirement. Best for ancillary service markets.
+
+4. **Experiment**: Try all three configurations with your specific use case to determine which performs best for your objectives.
 
 ---
 
-## Notes
+## Performance Metrics
 
-- All models are **offline/oracle** - they have perfect information about future arrivals/departures
-- All models require a **replay file** with simulation data
-- All models use **Gurobi** optimizer (commercial license required)
-- Set `NonConvex=2` parameter is used for quadratic constraints
-- Models output normalized actions in range `[-1, 1]`
+All configurations track the following metrics during evaluation:
+- `total_ev_served` - Number of EVs that received service
+- `total_profits` - Net profit/cost from operations
+- `total_energy_charged` - Total energy delivered to EVs
+- `total_energy_discharged` - Total energy extracted from EVs (V2G)
+- `average_user_satisfaction` - Mean satisfaction across all EVs
+- `power_tracker_violation` - Violations of power setpoint constraints
+- `tracking_error` - Deviation from power setpoints
+- `energy_user_satisfaction` - Energy-based satisfaction metric
+- `total_transformer_overload` - Total transformer capacity violations
+- `reward` - Cumulative episode reward
+
+However, the **importance** and **optimization** of each metric varies by configuration based on the reward function design.
